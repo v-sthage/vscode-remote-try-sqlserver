@@ -65,7 +65,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Failed to import Excel file {FileName}.", file.Name);
-            ShowError("The Excel file could not be uploaded or saved. Check that SQL Server is running and the database connection is configured.");
+            ShowError("The Excel file could not be uploaded or saved. Check that SQL Server is running and the database connection is configured.\n" + exception.InnerException.Message);
         }
     }
 
@@ -100,6 +100,23 @@
         if (missingHeaders.Length > 0)
         {
             throw new InvalidDataException($"The Master worksheet is missing required columns: {string.Join(", ", missingHeaders)}.");
+        }
+
+        //Read zone data from CSV file into a dictionary
+        string filePath = "/workspace/TryBlazor/Data/Zone Data.csv";
+        Dictionary<string, string> zoneData = new Dictionary<string, string>();
+
+        using (StreamReader sr = new StreamReader(filePath))
+        {
+            string? line;
+            while ((line = sr.ReadLine()) is not null)
+            {
+                string[] parts = line.Split(',');
+                if (parts.Length >= 2)
+                {
+                    zoneData[parts[0]] = parts[1];
+                }
+            }
         }
 
         var rows = new List<BeoImportRow>();
@@ -152,8 +169,16 @@
 
             var room = GetRequiredValue(values, "ROOM", excelRowNumber);
             var avail = GetOptionalValue(values, "AVAILABLE /      TURN TIME", excelRowNumber);
-            var itemText = GetOptionalValue(values, "DESCRIPTION", excelRowNumber);
+            int turntime = -1;
             
+            parseAvail(avail, out turntime, out var openTime);
+            var availableStartTime = TimeOnly.TryParse(openTime, CultureInfo.CurrentCulture, DateTimeStyles.None, out var parsedOpenTime)
+                ? parsedOpenTime
+                : TimeOnly.MinValue;
+
+
+            var itemText = GetOptionalValue(values, "DESCRIPTION", excelRowNumber);
+
             var quantityValue = values["#"];
             int? quantity = null;
             if (!string.IsNullOrWhiteSpace(quantityValue))
@@ -174,18 +199,21 @@
                 throw new InvalidDataException($"ID in row {excelRowNumber} must be a whole number.");
             }
 
-                      
+            var zone = zoneData.TryGetValue(room, out var zoneValue) ? zoneValue : "";
 
             rows.Add(new BeoImportRow(                
                 date,
                 startTime,
                 endTime,
                 room, 
-                avail,       
+                avail, 
+                availableStartTime,
+                turntime,
                 itemText,
                 quantity,
                 notes,
-                eventId));
+                eventId,
+                zone));
         }
 
         return rows;
@@ -231,6 +259,64 @@
             || TimeOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out time);
     }
 
+    private static void parseAvail(string availVal, out int turntime, out string startTime)
+    {
+        if (string.IsNullOrWhiteSpace(availVal))
+        {
+            turntime = -1;
+            startTime = "";
+            return;
+            //return "";
+        }
+
+        if(availVal.Contains("/"))
+        {
+            turntime = parseTurntime(availVal.Substring(availVal.IndexOf('/') + 1).Trim());
+            startTime = availVal.Substring(0, availVal.IndexOf('/')).Trim();
+            return;
+            //return availVal.Substring(0, availVal.IndexOf('/')).Trim();
+        }
+
+        if(availVal.ToUpper().Contains("OPEN"))
+        {
+            if(availVal.Trim() == "OPEN")
+            {
+                turntime = -1;
+                startTime = "";
+                return;
+                //return availVal.Trim();
+            }
+            else
+            {
+                startTime = availVal.Replace("OPEN", "").Trim();
+                turntime = -1;
+                return;
+                //return "OPEN";
+            }
+        }
+
+        turntime = -1;
+        startTime = "";
+        //return availVal.Trim();
+    }
+
+    private static int parseTurntime(string? turntime)
+    {
+        if (string.IsNullOrWhiteSpace(turntime))
+        {
+            return -1;
+        }
+
+        if(turntime.Contains("Hour") || turntime.Contains("hour") || turntime.Contains("H"))
+        {
+            return 60 * (int.TryParse(turntime.Substring(0, turntime.IndexOf('H')), out var hours) ? hours : 0);
+        }
+        else if(turntime.Contains("Minute") || turntime.Contains("minute") || turntime.Contains("M"))
+        {
+            return int.TryParse(turntime.Substring(0, turntime.IndexOf('M')), out var minutes) ? minutes : 0;
+        }
+        return -1;
+    }
     private void ShowError(string message)
     {
         isError = true;

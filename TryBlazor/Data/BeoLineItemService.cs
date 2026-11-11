@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using Microsoft.Data.SqlClient;
 
 namespace TryBlazor.Data;
@@ -13,18 +14,24 @@ public sealed class BeoLineItemService
             ?? throw new InvalidOperationException("Connection string 'Users' is not configured.");
     }
 
-    public async Task<IReadOnlyList<BeoOption>> GetBeosAsync()
+    public async Task<IReadOnlyList<BeoOption>> GetBeosAsync(string? zone = null, DateOnly? date = null)
     {
         const string query = @"
-            SELECT [Id], [EventID], [StartTime],[Location], [Date]
-            FROM [TryDbProjects].[dbo].[BEOs]
-            ORDER BY [Date] DESC, [Id] DESC;";
+                SELECT [Id], [EventID], [StartTime], [Location], [Date], [Zone], [Available], [OpenTime], [TurnTime]
+                FROM [TryDbProjects].[dbo].[BEOs]
+                WHERE (@Zone IS NULL OR [Zone] = @Zone)
+                    AND (@Date IS NULL OR ([Date] >= @Date AND [Date] < DATEADD(day, 1, @Date)))
+                ORDER BY [Date] DESC, [Id] DESC;";
         var beos = new List<BeoOption>();
 
         await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
 
         await using var command = new SqlCommand(query, connection);
+        command.Parameters.Add("@Zone", SqlDbType.NVarChar).Value = (object?)zone ?? DBNull.Value;
+        command.Parameters.Add("@Date", SqlDbType.Date).Value = date is null
+            ? DBNull.Value
+            : date.Value.ToDateTime(TimeOnly.MinValue);
         await using var reader = await command.ExecuteReaderAsync();
 
         while (await reader.ReadAsync())
@@ -34,10 +41,38 @@ public sealed class BeoLineItemService
                 reader.GetInt32(1),
                 TimeOnly.FromTimeSpan(reader.GetTimeSpan(2)),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.GetDateTime(4)));
+                reader.GetDateTime(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : TimeOnly.FromTimeSpan(reader.GetTimeSpan(7)),
+                reader.IsDBNull(8) ? null : reader.GetInt32(8)));
         }
 
         return beos;
+    }
+
+    public async Task<IReadOnlyList<string>> GetZonesAsync()
+    {
+        string query = @"
+            SELECT DISTINCT [Zone]
+            FROM [TryDbProjects].[dbo].[BEOs]
+            WHERE [Zone] IS NOT NULL
+            ORDER BY [Zone];";
+
+        var zones = new List<string>();
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand(query, connection);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        while (await reader.ReadAsync())
+        {
+            zones.Add(reader.GetString(0));
+        }
+
+        return zones;
     }
 
     public async Task<IReadOnlyList<LineItem>> GetLineItemsAsync(int beoId)
@@ -97,7 +132,7 @@ public sealed class BeoLineItemService
             return new BeoImportResult(0, 0);
         }
 
-        var beoIds = new Dictionary<BeoImportKey, int>();
+        var beoCount = 0;
         var lineItemsCreated = 0;
         
 
@@ -115,6 +150,8 @@ public sealed class BeoLineItemService
         BEOTable.Columns.Add("ImageLink", typeof(string));
         BEOTable.Columns.Add("Comments", typeof(string));
         BEOTable.Columns.Add("Available", typeof(string));
+        BEOTable.Columns.Add("OpenTime", typeof(TimeSpan));
+        
         BEOTable.Columns.Add("TurnTime", typeof(int));
 
         //lineItemTable.Columns.Add("Id", typeof(int));
@@ -134,9 +171,8 @@ public sealed class BeoLineItemService
 
         foreach (var row in rows)
         {
-            var key = new BeoImportKey(row.EventId, row.Date, row.Room, row.StartTime, row.EndTime, row.Avail);
-            if (!beoIds.ContainsKey(key))
-            {
+            var key = new BeoImportKey(row.EventId, row.Date, row.Room, row.StartTime, row.EndTime, row.Avail, row.TurnTime, row.Zone);
+            
                 if(row.Avail != "" && (row.EventId != lastEventId || row.Date.ToDateTime(TimeOnly.MinValue) != lastDate || row.StartTime != lastStartTime))
                 {
                     var newRow = BEOTable.NewRow();
@@ -152,14 +188,17 @@ public sealed class BeoLineItemService
                     newRow["Date"] = row.Date.ToDateTime(TimeOnly.MinValue);
                     newRow["Location"] = row.Room;
                     newRow["Available"] = row.Avail;
+                    newRow["OpenTime"] = row.AvailableStartTime.ToTimeSpan();
                     newRow["TechAssigned"] = DBNull.Value;
-                    newRow["Zone"] = DBNull.Value;
+                    newRow["Zone"] = row.Zone;
                     newRow["ImageLink"] = DBNull.Value;
                     newRow["Comments"] = DBNull.Value;
-                    newRow["TurnTime"] = DBNull.Value;
+                    newRow["TurnTime"] = row.TurnTime;
                     BEOTable.Rows.Add(newRow);
+                    beoCount++;
+                    
                 }
-            }
+            
 
             var lineItemRow = lineItemTable.NewRow();
             lineItemRow["BEOid"] = hashCode; // Use the generated ID
@@ -173,11 +212,24 @@ public sealed class BeoLineItemService
         }
         try{
             await using var connection = new SqlConnection(_connectionString);
-            using var bulkCopy = new SqlBulkCopy(connection)
+            using var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.KeepIdentity, null)
             {
                 DestinationTableName = "TryDbProjects.dbo.BEOs",
                 BatchSize = 1000
             };
+            bulkCopy.ColumnMappings.Add("ID", "Id");
+            bulkCopy.ColumnMappings.Add("EventID", "EventID");
+            bulkCopy.ColumnMappings.Add("Location", "Location");
+            bulkCopy.ColumnMappings.Add("StartTime", "StartTime");
+            bulkCopy.ColumnMappings.Add("EndTime", "EndTime");
+            bulkCopy.ColumnMappings.Add("Date", "Date");
+            bulkCopy.ColumnMappings.Add("TechAssigned", "TechAssigned");
+            bulkCopy.ColumnMappings.Add("Zone", "Zone");
+            bulkCopy.ColumnMappings.Add("ImageLink", "ImageLink");
+            bulkCopy.ColumnMappings.Add("Comments", "Comments");
+            bulkCopy.ColumnMappings.Add("Available", "Available");
+            bulkCopy.ColumnMappings.Add("OpenTime", "OpenTime");
+            bulkCopy.ColumnMappings.Add("TurnTime", "TurnTime");
             await connection.OpenAsync();
         
             await bulkCopy.WriteToServerAsync(BEOTable);
@@ -238,11 +290,20 @@ public sealed class BeoLineItemService
         // }
 
         //await transaction.CommitAsync();
-        return new BeoImportResult(beoIds.Count, lineItemsCreated);
+        return new BeoImportResult(beoCount, lineItemsCreated);
     }
 }
 
-public sealed record BeoOption(int Id, int EventId, TimeOnly StartTime, string? Location, DateTime Date);
+public sealed record BeoOption(
+    int Id,
+    int EventId,
+    TimeOnly StartTime,
+    string? Location,
+    DateTime Date,
+    string? Zone,
+    string? Available,
+    TimeOnly? OpenTime,
+    int? TurnTime);
 
 public sealed record BeoImportRow(    
     DateOnly Date,
@@ -250,14 +311,19 @@ public sealed record BeoImportRow(
     TimeOnly EndTime,
     string Room,
     string Avail,
+    TimeOnly AvailableStartTime,
+    int TurnTime,
     string? Description,
     int? Quantity,
     string? Notes,
-    int EventId);
+    int EventId,
+    string? Zone
+    );
 
 public sealed record BeoImportResult(int BeosCreated, int LineItemsCreated);
 
-internal readonly record struct BeoImportKey(int EventId, DateOnly Date, string Room, TimeOnly StartTime, TimeOnly EndTime, string Avail)
+internal readonly record struct BeoImportKey(int EventId, DateOnly Date, string Room, TimeOnly StartTime,
+    TimeOnly EndTime, string Avail, int TurnTime, string? Zone)
 {
    // public BeoImportKey(int eventId, DateOnly date, string room, TimeOnly startTime, TimeOnly endTime, string avail)
    //     : this(eventId, date, room, startTime, endTime, avail)

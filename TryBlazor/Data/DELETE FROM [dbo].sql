@@ -1,1 +1,2 @@
-DELETE FROM [dbo].[BEOs] 
+DELETE FROM [TryDBProjects].[dbo].[LineItems] 
+DELETE FROM [TryDBProjects].[dbo].[BEOs] 

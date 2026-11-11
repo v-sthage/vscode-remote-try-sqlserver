@@ -1,0 +1,137 @@
+@page "/beos"
+@using System.Globalization
+@using TryBlazor.Data
+@inject BeoLineItemService BeoLineItemService
+@inject ILogger<Beos> Logger
+
+<PageTitle>BEOs</PageTitle>
+
+<h1>BEOs</h1>
+
+@if (errorMessage is not null)
+{
+    <div class="alert alert-danger" role="alert">@errorMessage</div>
+}
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <label for="beo-date" class="form-label">Date</label>
+        <input id="beo-date" type="date" class="form-control"
+               value="@selectedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)"
+               @onchange="HandleDateChanged" />
+    </div>
+    <div class="col-md-4">
+        <label for="zone-select" class="form-label">Zone</label>
+        <select id="zone-select" class="form-select" value="@selectedZone" @onchange="HandleZoneChanged">
+            <option value="">All zones</option>
+            @if (zones is not null)
+            {
+                @foreach (var zone in zones)
+                {
+                    <option value="@zone">@zone</option>
+                }
+            }
+        </select>
+    </div>
+</div>
+
+@if (beos is null)
+{
+    @if (errorMessage is null)
+    {
+        <p><em>Loading BEOs...</em></p>
+    }
+}
+else if (beos.Count == 0)
+{
+    <p>No BEOs were found for the selected date and zone.</p>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th scope="col">Room</th>
+                    <th scope="col">Start Time</th>
+                    <th scope="col">Available</th>
+                    <th scope="col">Open Time</th>
+                    <th scope="col">Turn Time</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (BeoOption beo in beos)
+                {
+                    <tr>
+                        <td>@(beo.Location ?? "(none)")</td>
+                        <td>@beo.StartTime.ToString("h:mm tt", CultureInfo.CurrentCulture)</td>
+                        <td>@(string.IsNullOrWhiteSpace(beo.Available) ? "(none)" : beo.Available)</td>
+                        <td>@(beo.OpenTime is TimeOnly openTime ? openTime.ToString("h:mm tt", CultureInfo.CurrentCulture) : "")</td>
+                        <td>@(beo.TurnTime is int turnTime && turnTime > 0 ? (turnTime > 60 ? $"{turnTime / 60} hour {(turnTime % 60 == 0 ? "" : $"{turnTime % 60} min")}" : $"{turnTime} min") : "")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<BeoOption>? beos;
+    private IReadOnlyList<string>? zones;
+    private string? selectedZone;
+    private DateOnly selectedDate = DateOnly.FromDateTime(DateTime.Today);
+    private string? errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            zones = await BeoLineItemService.GetZonesAsync();
+            await ReloadBeosAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to load BEO filters.");
+            errorMessage = "Could not load BEOs. Check that SQL Server is running and the database connection is configured.";
+        }
+    }
+
+    private async Task HandleDateChanged(ChangeEventArgs args)
+    {
+        if (!DateOnly.TryParseExact(
+                args.Value?.ToString(),
+                "yyyy-MM-dd",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var date))
+        {
+            errorMessage = "Select a valid date.";
+            return;
+        }
+
+        selectedDate = date;
+        await ReloadBeosAsync();
+    }
+
+    private async Task HandleZoneChanged(ChangeEventArgs args)
+    {
+        selectedZone = string.IsNullOrWhiteSpace(args.Value?.ToString()) ? null : args.Value.ToString();
+        await ReloadBeosAsync();
+    }
+
+    private async Task ReloadBeosAsync()
+    {
+        errorMessage = null;
+        beos = null;
+
+        try
+        {
+            beos = await BeoLineItemService.GetBeosAsync(selectedZone, selectedDate);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to load BEOs for {Date} and zone {Zone}.", selectedDate, selectedZone);
+            errorMessage = "Could not load BEOs. Check that SQL Server is running and the database connection is configured.";
+        }
+    }
+}

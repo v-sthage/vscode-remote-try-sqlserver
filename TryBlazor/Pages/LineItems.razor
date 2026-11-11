@@ -12,31 +12,53 @@
     <div class="alert alert-danger" role="alert">@errorMessage</div>
 }
 
-@if (beos is null)
+@if (beos is null || zones is null)
 {
     <p><em>Loading BEOs...</em></p>
 }
-else if (beos.Count == 0)
-{
-    <p>No BEOs were found.</p>
-}
 else
 {
+    <div class="mb-3">
+        <label for="beo-date" class="form-label">Select a Date</label>
+        <input id="beo-date" type="date" class="form-control"
+               value="@selectedDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)"
+               @onchange="HandleDateChanged" />
+    </div>
+    <div class="mb-3">
+        <label for="zone-select" class="form-label">Select a Zone</label>
+        <select id="zone-select" class="form-select" value="@selectedZoneId" @onchange="HandleZoneChanged">
+            <option value="">Choose a Zone...</option>
+            @foreach (var zone in zones)
+            {
+                <option value="@zone">
+                    @zone
+                </option>
+            }
+        </select>
+    </div>
     <div class="mb-3">
         <label for="beo-select" class="form-label">Select a BEO</label>
         <select id="beo-select" class="form-select" value="@selectedBeoId" @onchange="HandleBeoChanged">
             <option value="">Choose a BEO...</option>
             @foreach (var beo in beos)
             {
-                <option value="@beo.Id" selected="@(selectedBeoId == beo.Id)">
-                    BEO Event @beo.EventId, @beo.StartTime.ToString("hh\\:mm")@if (!string.IsNullOrWhiteSpace(beo.Location))
+                <option value="@beo.Id">
+                    @if (!string.IsNullOrWhiteSpace(beo.Location))
                     {
-                        <text>, @beo.Location</text>
+                        <text>@beo.Location | </text>
                     }
+                    #@beo.EventId | @beo.StartTime.ToString("hh\\:mm")
                 </option>
             }
         </select>
     </div>
+
+    @if (beos.Count == 0)
+    {
+        <p>@(selectedZoneId is null
+            ? $"No BEOs were found on {selectedDate:d}."
+            : $"No BEOs were found in Zone {selectedZoneId} on {selectedDate:d}.")</p>
+    }
 
     @if (selectedBeoId is not null)
     {
@@ -89,8 +111,11 @@ else
 
 @code {
     private IReadOnlyList<BeoOption>? beos;
+    private IReadOnlyList<string>? zones;
     private IReadOnlyList<LineItem>? lineItems;
     private int? selectedBeoId;
+    private string? selectedZoneId;
+    private DateTime selectedDate = DateTime.Today;
     private bool isLoadingLineItems;
     private string? errorMessage;
 
@@ -98,7 +123,8 @@ else
     {
         try
         {
-            beos = await BeoLineItemService.GetBeosAsync();
+            zones = await BeoLineItemService.GetZonesAsync();
+            beos = await BeoLineItemService.GetBeosAsync(date: DateOnly.FromDateTime(selectedDate));
         }
         catch (Exception exception)
         {
@@ -154,6 +180,53 @@ else
         {
             Logger.LogError(exception, "Failed to mark line item {LineItemId} as complete.", id);
             errorMessage = "Could not mark the line item as complete.";
+        }
+    }
+
+    private async Task HandleZoneChanged(ChangeEventArgs args)
+    {
+        var zone = args.Value?.ToString();
+        if (string.IsNullOrEmpty(zone))
+        {
+            zone = null;
+        }
+
+        selectedZoneId = zone;
+        await ReloadBeosAsync();
+    }
+
+    private async Task HandleDateChanged(ChangeEventArgs args)
+    {
+        if (!DateTime.TryParseExact(
+                args.Value?.ToString(),
+                "yyyy-MM-dd",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var date))
+        {
+            errorMessage = "Select a valid date.";
+            return;
+        }
+
+        selectedDate = date;
+        await ReloadBeosAsync();
+    }
+
+    private async Task ReloadBeosAsync()
+    {
+        errorMessage = null;
+        selectedBeoId = null;
+        lineItems = null;
+        isLoadingLineItems = false;
+
+        try
+        {
+            beos = await BeoLineItemService.GetBeosAsync(selectedZoneId, DateOnly.FromDateTime(selectedDate));
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to load BEOs.");
+            errorMessage = "Could not load BEOs. Check that SQL Server is running and the database connection is configured.";
         }
     }
 }
