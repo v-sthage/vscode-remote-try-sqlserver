@@ -1,4 +1,5 @@
 @page "/import-excel"
+@attribute [Authorize(Policy = RolePolicies.StandardAccess)]
 @using System.Globalization
 @using NPOI.SS.UserModel
 @using TryBlazor.Data
@@ -176,6 +177,7 @@
                 ? parsedOpenTime
                 : TimeOnly.MinValue;
 
+            var setByTime = getSetByTime(availableStartTime, turntime);
 
             var itemText = GetOptionalValue(values, "DESCRIPTION", excelRowNumber);
 
@@ -208,6 +210,7 @@
                 room, 
                 avail, 
                 availableStartTime,
+                setByTime,
                 turntime,
                 itemText,
                 quantity,
@@ -307,6 +310,12 @@
             return -1;
         }
 
+        if(turntime.Contains(":"))
+        {
+            return (int.TryParse(turntime.Substring(0, turntime.IndexOf(':')), out var hours) ? hours * 60 : 0)
+                + (int.TryParse(turntime.Substring(turntime.IndexOf(':') + 1), out var minutes) ? minutes : 0);
+        }
+
         if(turntime.Contains("Hour") || turntime.Contains("hour") || turntime.Contains("H"))
         {
             return 60 * (int.TryParse(turntime.Substring(0, turntime.IndexOf('H')), out var hours) ? hours : 0);
@@ -316,6 +325,11 @@
             return int.TryParse(turntime.Substring(0, turntime.IndexOf('M')), out var minutes) ? minutes : 0;
         }
         return -1;
+    }
+
+    private static TimeOnly getSetByTime(TimeOnly openTime, int turntime)
+    {
+        return openTime.AddMinutes(turntime);
     }
     private void ShowError(string message)
     {

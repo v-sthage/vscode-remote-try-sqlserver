@@ -1,19 +1,81 @@
 @page "/users"
+@attribute [Authorize(Policy = RolePolicies.UserManagement)]
 @using TryBlazor.Data
-@inject UserEmailService UserEmailService
+@inject UserService UserService
+@inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ILogger<Users> Logger
 
-<h1>User emails</h1>
+<PageTitle>Users</PageTitle>
 
-@if (errorMessage is not null)
+<h1>Users</h1>
+
+<h2>Create user</h2>
+
+@if (successMessage is not null)
 {
-    <div class="alert alert-danger" role="alert">@errorMessage</div>
+    <div class="alert alert-success" role="status">@successMessage</div>
 }
-else if (emails is null)
+@if (createErrorMessage is not null)
 {
-    <p><em>Loading email addresses...</em></p>
+    <div class="alert alert-danger" role="alert">@createErrorMessage</div>
 }
-else if (emails.Count == 0)
+
+<EditForm Model="@newUser" OnValidSubmit="CreateUserAsync">
+    <DataAnnotationsValidator />
+    <ValidationSummary />
+
+    <div class="mb-3">
+        <label for="first-name" class="form-label">First name</label>
+        <InputText id="first-name" class="form-control" @bind-Value="newUser.FirstName" />
+        <ValidationMessage For="@(() => newUser.FirstName)" />
+    </div>
+    <div class="mb-3">
+        <label for="last-name" class="form-label">Last name</label>
+        <InputText id="last-name" class="form-control" @bind-Value="newUser.LastName" />
+        <ValidationMessage For="@(() => newUser.LastName)" />
+    </div>
+    <div class="mb-3">
+        <label for="role" class="form-label">Role</label>
+        <InputSelect id="role" class="form-select" @bind-Value="newUser.Role">
+            <option value="0">0 - BEO access only</option>
+            <option value="1">1 - No page access</option>
+            <option value="2">2 - Upload access</option>
+            <option value="3">3 - Upload access</option>
+            <option value="4">4 - User management</option>
+        </InputSelect>
+        <ValidationMessage For="@(() => newUser.Role)" />
+    </div>
+    <div class="mb-3">
+        <label for="email" class="form-label">Email</label>
+        <InputText id="email" type="email" class="form-control" autocomplete="email" @bind-Value="newUser.Email" />
+        <ValidationMessage For="@(() => newUser.Email)" />
+    </div>
+    <div class="mb-3">
+        <label for="password" class="form-label">Password</label>
+        <InputText id="password" type="password" class="form-control" autocomplete="new-password" @bind-Value="newUser.Password" />
+        <ValidationMessage For="@(() => newUser.Password)" />
+    </div>
+    <div class="mb-3">
+        <label for="confirm-password" class="form-label">Confirm password</label>
+        <InputText id="confirm-password" type="password" class="form-control" autocomplete="new-password" @bind-Value="newUser.ConfirmPassword" />
+        <ValidationMessage For="@(() => newUser.ConfirmPassword)" />
+    </div>
+    <button type="submit" class="btn btn-primary" disabled="@isSaving">
+        @(isSaving ? "Creating..." : "Create user")
+    </button>
+</EditForm>
+
+<h2 class="mt-4">User list</h2>
+
+@if (loadErrorMessage is not null)
+{
+    <div class="alert alert-danger" role="alert">@loadErrorMessage</div>
+}
+else if (users is null)
+{
+    <p><em>Loading users...</em></p>
+}
+else if (users.Count == 0)
 {
     <p>No users were found.</p>
 }
@@ -22,34 +84,162 @@ else
     <table class="table">
         <thead>
             <tr>
+                <th>First name</th>
+                <th>Last name</th>
                 <th>Email</th>
+                <th>Role</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
-            @foreach (var email in emails)
+            @foreach (var user in users)
             {
                 <tr>
-                    <td>@(email ?? "(no email)")</td>
+                    <td>@user.FirstName</td>
+                    <td>@(user.LastName ?? "(none)")</td>
+                    <td>@(user.Email ?? "(no email)")</td>
+                    <td>@user.Role</td>
+                    <td>
+                        <button type="button" class="btn btn-outline-primary btn-sm"
+                                @onclick="() => TogglePasswordReset(user.Id)"
+                                disabled="@isResetting">
+                            @(activeResetUserId == user.Id ? "Cancel" : "Reset password")
+                        </button>
+                    </td>
                 </tr>
+                @if (activeResetUserId == user.Id)
+                {
+                    <tr>
+                        <td colspan="5">
+                            @if (resetSuccessMessage is not null)
+                            {
+                                <div class="alert alert-success" role="status">@resetSuccessMessage</div>
+                            }
+                            @if (resetErrorMessage is not null)
+                            {
+                                <div class="alert alert-danger" role="alert">@resetErrorMessage</div>
+                            }
+                            <EditForm Model="@passwordReset" OnValidSubmit="() => ResetPasswordAsync(user)">
+                                <DataAnnotationsValidator />
+                                <ValidationSummary />
+                                <div class="row g-2 align-items-end">
+                                    <div class="col-md-4">
+                                        <label for="@($"reset-password-{user.Id}")" class="form-label">New password</label>
+                                        <InputText id="@($"reset-password-{user.Id}")" type="password" class="form-control"
+                                                   autocomplete="new-password" @bind-Value="passwordReset.Password" />
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="@($"confirm-reset-password-{user.Id}")" class="form-label">Confirm new password</label>
+                                        <InputText id="@($"confirm-reset-password-{user.Id}")" type="password" class="form-control"
+                                                   autocomplete="new-password" @bind-Value="passwordReset.ConfirmPassword" />
+                                    </div>
+                                    <div class="col-md-4">
+                                        <button type="submit" class="btn btn-primary" disabled="@isResetting">
+                                            @(isResetting ? "Resetting..." : "Save new password")
+                                        </button>
+                                    </div>
+                                </div>
+                            </EditForm>
+                        </td>
+                    </tr>
+                }
             }
         </tbody>
     </table>
 }
 
 @code {
-    private IReadOnlyList<string?>? emails;
-    private string? errorMessage;
+    private IReadOnlyList<UserRecord>? users;
+    private UserCreateModel newUser = new();
+    private string? loadErrorMessage;
+    private string? createErrorMessage;
+    private string? successMessage;
+    private bool isSaving;
+    private Guid? activeResetUserId;
+    private PasswordResetModel passwordReset = new();
+    private string? resetErrorMessage;
+    private string? resetSuccessMessage;
+    private bool isResetting;
 
     protected override async Task OnInitializedAsync()
     {
         try
         {
-            emails = await UserEmailService.GetFirstTenAsync();
+            users = await UserService.GetFirstTenAsync();
         }
         catch (Exception exception)
         {
-            Logger.LogError(exception, "Failed to load user email addresses.");
-            errorMessage = "Could not load user emails. Check that SQL Server is running and TryDbProjects is deployed.";
+            Logger.LogError(exception, "Failed to load users.");
+            loadErrorMessage = "Could not load users. Check that SQL Server is running and TryDbProjects is deployed.";
+        }
+    }
+
+    private async Task CreateUserAsync()
+    {
+        isSaving = true;
+        createErrorMessage = null;
+        successMessage = null;
+
+        try
+        {
+            var user = await UserService.CreateAsync(
+                newUser.FirstName.Trim(),
+                newUser.LastName.Trim(),
+                newUser.Email.Trim(),
+                newUser.Password,
+                newUser.Role);
+
+            users = new[] { user }.Concat(users ?? Array.Empty<UserRecord>()).Take(10).ToArray();
+            successMessage = $"User {user.Email} was created.";
+            newUser = new UserCreateModel();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to create a user.");
+            createErrorMessage = "Could not create the user. Check that SQL Server is running and TryDbProjects is deployed.";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private void TogglePasswordReset(Guid userId)
+    {
+        activeResetUserId = activeResetUserId == userId ? null : userId;
+        passwordReset = new PasswordResetModel();
+        resetErrorMessage = null;
+        resetSuccessMessage = null;
+    }
+
+    private async Task ResetPasswordAsync(UserRecord user)
+    {
+        isResetting = true;
+        resetErrorMessage = null;
+        resetSuccessMessage = null;
+
+        try
+        {
+            var authenticationState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            await UserService.ResetPasswordAsync(
+                authenticationState.User,
+                user.Id,
+                passwordReset.Password);
+            resetSuccessMessage = $"Password for {user.Email} was reset.";
+            passwordReset = new PasswordResetModel();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            resetErrorMessage = "Only users with role 4 or higher can reset passwords.";
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to reset password for user {UserId}.", user.Id);
+            resetErrorMessage = "Could not reset the password. Check the database connection and try again.";
+        }
+        finally
+        {
+            isResetting = false;
         }
     }
 }

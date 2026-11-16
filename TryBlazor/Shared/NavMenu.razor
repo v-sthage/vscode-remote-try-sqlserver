@@ -9,41 +9,66 @@
 
 <div class="@NavMenuCssClass" @onclick="ToggleNavMenu">
     <nav class="flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="oi oi-home" aria-hidden="true"></span> Home
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="counter">
-                <span class="oi oi-plus" aria-hidden="true"></span> Counter
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="fetchdata">
-                <span class="oi oi-list-rich" aria-hidden="true"></span> Fetch data
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="users">
-                <span class="oi oi-envelope-closed" aria-hidden="true"></span> Users
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="beos">
-                <span class="oi oi-list-rich" aria-hidden="true"></span> BEOs
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="line-items">
-                <span class="oi oi-list-rich" aria-hidden="true"></span> BEO line items
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="import-excel">
-                <span class="oi oi-cloud-upload" aria-hidden="true"></span> Import Excel
-            </NavLink>
-        </div>
+        <AuthorizeView Policy="@RolePolicies.BeoAccess">
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="beos">
+                    <span class="oi oi-list-rich" aria-hidden="true"></span> BEOs
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="line-items">
+                    <span class="oi oi-list-rich" aria-hidden="true"></span> BEO line items
+                </NavLink>
+            </div>
+        </AuthorizeView>
+        <AuthorizeView Policy="@RolePolicies.StandardAccess">
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                    <span class="oi oi-home" aria-hidden="true"></span> Home
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="counter">
+                    <span class="oi oi-plus" aria-hidden="true"></span> Counter
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="fetchdata">
+                    <span class="oi oi-list-rich" aria-hidden="true"></span> Fetch data
+                </NavLink>
+            </div>
+        </AuthorizeView>
+        <AuthorizeView Policy="@RolePolicies.StandardAccess">
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="import-excel">
+                    <span class="oi oi-cloud-upload" aria-hidden="true"></span> Import Excel
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="assign-beos">
+                    <span class="oi oi-person" aria-hidden="true"></span> Assign BEOs
+                </NavLink>
+            </div>
+        </AuthorizeView>
+        <AuthorizeView Policy="@RolePolicies.UserManagement">
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="users">
+                    <span class="oi oi-envelope-closed" aria-hidden="true"></span> Users
+                </NavLink>
+            </div>
+        </AuthorizeView>
+        <AuthorizeView>
+            <Authorized>
+                <div class="nav-item px-3">
+                    <a class="nav-link" href="logout">Sign out</a>
+                </div>
+            </Authorized>
+            <NotAuthorized>
+                <div class="nav-item px-3">
+                    <a class="nav-link" href="login">Sign in</a>
+                </div>
+            </NotAuthorized>
+        </AuthorizeView>
     </nav>
 </div>
 

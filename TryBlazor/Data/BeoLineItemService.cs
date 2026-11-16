@@ -1,6 +1,8 @@
 using System.Data;
 using System.Globalization;
+using System.Security.Claims;
 using Microsoft.Data.SqlClient;
+using TryBlazor.Security;
 
 namespace TryBlazor.Data;
 
@@ -14,13 +16,97 @@ public sealed class BeoLineItemService
             ?? throw new InvalidOperationException("Connection string 'Users' is not configured.");
     }
 
-    public async Task<IReadOnlyList<BeoOption>> GetBeosAsync(string? zone = null, DateOnly? date = null)
+    public Task<IReadOnlyList<BeoOption>> GetBeosAsync(string? zone = null, DateOnly? date = null)
+    {
+        return GetBeosAsync(zone, date, null, null);
+    }
+
+    public async Task<IReadOnlyList<BeoOption>> GetBeosAssignedToAsync(
+        ClaimsPrincipal actor,
+        string? zone,
+        DateOnly? date)
+    {
+        if (actor.Identity?.IsAuthenticated != true
+            || !RolePolicies.HasBeoAccess(actor)
+            || !Guid.TryParse(actor.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var userId))
+        {
+            throw new UnauthorizedAccessException("A signed-in user with BEO access is required.");
+        }
+
+        return await GetBeosAsync(zone, date, null, userId);
+    }
+
+    public async Task<BeoOption?> GetBeoAsync(int id)
+    {
+        var beos = await GetBeosAsync(null, null, id, null);
+        return beos.SingleOrDefault();
+    }
+
+    public async Task UpdateBeoImageLinkAsync(int beoId, string imageLink)
     {
         const string query = @"
-                SELECT [Id], [EventID], [StartTime], [Location], [Date], [Zone], [Available], [OpenTime], [TurnTime]
+            UPDATE [TryDbProjects].[dbo].[BEOs]
+            SET [ImageLink] = @ImageLink
+            WHERE [Id] = @BeoId;";
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand(query, connection);
+        command.Parameters.Add("@BeoId", SqlDbType.Int).Value = beoId;
+        command.Parameters.Add("@ImageLink", SqlDbType.NVarChar).Value = imageLink;
+
+        if (await command.ExecuteNonQueryAsync() == 0)
+        {
+            throw new InvalidOperationException($"BEO {beoId} was not found.");
+        }
+    }
+
+    public async Task AssignBeoAsync(ClaimsPrincipal actor, int beoId, DateOnly date, Guid? userId)
+    {
+        if (actor.Identity?.IsAuthenticated != true || !RolePolicies.HasMinimumRole(actor, 2))
+        {
+            throw new UnauthorizedAccessException("Only users with role 2 or higher can assign BEOs.");
+        }
+
+        const string query = @"
+            UPDATE [TryDbProjects].[dbo].[BEOs]
+            SET [TechAssigned] = @UserId
+            WHERE [Id] = @BeoId
+                AND [Date] = @Date
+                AND (@UserId IS NULL OR EXISTS (
+                    SELECT 1
+                    FROM [TryDbProjects].[dbo].[Users]
+                    WHERE [Id] = @UserId));";
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand(query, connection);
+        command.Parameters.Add("@UserId", SqlDbType.UniqueIdentifier).Value = (object?)userId ?? DBNull.Value;
+        command.Parameters.Add("@BeoId", SqlDbType.Int).Value = beoId;
+        command.Parameters.Add("@Date", SqlDbType.Date).Value = date.ToDateTime(TimeOnly.MinValue);
+
+        if (await command.ExecuteNonQueryAsync() != 1)
+        {
+            throw new InvalidOperationException("The selected BEO or user was not found.");
+        }
+    }
+
+    private async Task<IReadOnlyList<BeoOption>> GetBeosAsync(
+        string? zone,
+        DateOnly? date,
+        int? id,
+        Guid? assignedToUserId)
+    {
+        const string query = @"
+                SELECT [Id], [EventID], [StartTime], [Location], [Date], [Zone], [Available], [OpenTime], [TurnTime],
+                    [EndTime], [TechAssigned], [ImageLink], [Comments]
                 FROM [TryDbProjects].[dbo].[BEOs]
                 WHERE (@Zone IS NULL OR [Zone] = @Zone)
                     AND (@Date IS NULL OR ([Date] >= @Date AND [Date] < DATEADD(day, 1, @Date)))
+                    AND (@Id IS NULL OR [Id] = @Id)
+                    AND (@AssignedToUserId IS NULL OR [TechAssigned] = @AssignedToUserId)
                 ORDER BY [Date] DESC, [Id] DESC;";
         var beos = new List<BeoOption>();
 
@@ -32,6 +118,9 @@ public sealed class BeoLineItemService
         command.Parameters.Add("@Date", SqlDbType.Date).Value = date is null
             ? DBNull.Value
             : date.Value.ToDateTime(TimeOnly.MinValue);
+        command.Parameters.Add("@Id", SqlDbType.Int).Value = (object?)id ?? DBNull.Value;
+        command.Parameters.Add("@AssignedToUserId", SqlDbType.UniqueIdentifier).Value =
+            (object?)assignedToUserId ?? DBNull.Value;
         await using var reader = await command.ExecuteReaderAsync();
 
         while (await reader.ReadAsync())
@@ -45,7 +134,11 @@ public sealed class BeoLineItemService
                 reader.IsDBNull(5) ? null : reader.GetString(5),
                 reader.IsDBNull(6) ? null : reader.GetString(6),
                 reader.IsDBNull(7) ? null : TimeOnly.FromTimeSpan(reader.GetTimeSpan(7)),
-                reader.IsDBNull(8) ? null : reader.GetInt32(8)));
+                reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                reader.IsDBNull(9) ? null : TimeOnly.FromTimeSpan(reader.GetTimeSpan(9)),
+                reader.IsDBNull(10) ? null : reader.GetGuid(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetString(12)));
         }
 
         return beos;
@@ -145,12 +238,13 @@ public sealed class BeoLineItemService
         BEOTable.Columns.Add("StartTime", typeof(TimeSpan));
         BEOTable.Columns.Add("EndTime", typeof(TimeSpan));
         BEOTable.Columns.Add("Date", typeof(DateTime));
-        BEOTable.Columns.Add("TechAssigned", typeof(int));
+        BEOTable.Columns.Add("TechAssigned", typeof(Guid));
         BEOTable.Columns.Add("Zone", typeof(string));
         BEOTable.Columns.Add("ImageLink", typeof(string));
         BEOTable.Columns.Add("Comments", typeof(string));
         BEOTable.Columns.Add("Available", typeof(string));
         BEOTable.Columns.Add("OpenTime", typeof(TimeSpan));
+        BEOTable.Columns.Add("SetByTime", typeof(TimeSpan));
         
         BEOTable.Columns.Add("TurnTime", typeof(int));
 
@@ -194,6 +288,7 @@ public sealed class BeoLineItemService
                     newRow["ImageLink"] = DBNull.Value;
                     newRow["Comments"] = DBNull.Value;
                     newRow["TurnTime"] = row.TurnTime;
+                    newRow["SetByTime"] = row.SetByTime.ToTimeSpan();
                     BEOTable.Rows.Add(newRow);
                     beoCount++;
                     
@@ -229,6 +324,8 @@ public sealed class BeoLineItemService
             bulkCopy.ColumnMappings.Add("Comments", "Comments");
             bulkCopy.ColumnMappings.Add("Available", "Available");
             bulkCopy.ColumnMappings.Add("OpenTime", "OpenTime");
+            bulkCopy.ColumnMappings.Add("SetByTime", "SetByTime");
+            
             bulkCopy.ColumnMappings.Add("TurnTime", "TurnTime");
             await connection.OpenAsync();
         
@@ -303,7 +400,11 @@ public sealed record BeoOption(
     string? Zone,
     string? Available,
     TimeOnly? OpenTime,
-    int? TurnTime);
+    int? TurnTime,
+    TimeOnly? EndTime,
+    Guid? TechAssigned,
+    string? ImageLink,
+    string? Comments);
 
 public sealed record BeoImportRow(    
     DateOnly Date,
@@ -312,6 +413,7 @@ public sealed record BeoImportRow(
     string Room,
     string Avail,
     TimeOnly AvailableStartTime,
+    TimeOnly SetByTime,
     int TurnTime,
     string? Description,
     int? Quantity,

@@ -1,0 +1,328 @@
+@page "/beos/{BeoId:int}"
+@attribute [Authorize(Policy = RolePolicies.BeoAccess)]
+@using System.Globalization
+@using TryBlazor.Data
+@inject BeoLineItemService BeoLineItemService
+@inject ILogger<BeoDetails> Logger
+@inject IWebHostEnvironment HostEnvironment
+
+<PageTitle>@(beo is null ? "BEO details" : $"BEO #{beo.EventId}")</PageTitle>
+
+<p><a href="/beos">Back to BEOs</a></p>
+
+@if (errorMessage is not null)
+{
+    <div class="alert alert-danger" role="alert">@errorMessage</div>
+}
+
+@if (beo is null)
+{
+    @if (errorMessage is null)
+    {
+        <p><em>Loading BEO...</em></p>
+    }
+}
+else
+{
+    <h1>@(beo.Location ?? $"BEO #{beo.EventId}")</h1>
+
+    <dl class="row">
+        <dt class="col-sm-3">Event ID</dt>
+        <dd class="col-sm-9">@beo.EventId</dd>
+
+        <dt class="col-sm-3">Date</dt>
+        <dd class="col-sm-9">@beo.Date.ToString("d", CultureInfo.CurrentCulture)</dd>
+
+        <dt class="col-sm-3">Zone</dt>
+        <dd class="col-sm-9">@(beo.Zone ?? "(none)")</dd>
+
+        <dt class="col-sm-3">Start time</dt>
+        <dd class="col-sm-9">@beo.StartTime.ToString("h:mm tt", CultureInfo.CurrentCulture)</dd>
+
+        <dt class="col-sm-3">End time</dt>
+        <dd class="col-sm-9">@(beo.EndTime?.ToString("h:mm tt", CultureInfo.CurrentCulture) ?? "(none)")</dd>
+
+        <dt class="col-sm-3">Available</dt>
+        <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(beo.Available) ? "(none)" : beo.Available)</dd>
+
+        <dt class="col-sm-3">Open time</dt>
+        <dd class="col-sm-9">@(beo.OpenTime?.ToString("h:mm tt", CultureInfo.CurrentCulture) ?? "(none)")</dd>
+
+        <dt class="col-sm-3">Turn time</dt>
+        <dd class="col-sm-9">@(beo.TurnTime is int turnTime && turnTime > 0 ? (turnTime > 60 ? $"{turnTime / 60} hour {(turnTime % 60 == 0 ? "" : $"{turnTime % 60} min")}" : $"{turnTime} min") : "(none)")</dd>
+
+        <dt class="col-sm-3">Tech assigned</dt>
+        <dd class="col-sm-9">@(beo.TechAssigned?.ToString() ?? "(none)")</dd>
+
+        <dt class="col-sm-3">Image link</dt>
+        <dd class="col-sm-9">
+            @if (string.IsNullOrWhiteSpace(beo.ImageLink))
+            {
+                <span>(none)</span>
+            }
+            else
+            {
+                <a href="@beo.ImageLink" target="_blank" rel="noopener noreferrer">@beo.ImageLink</a>
+            }
+        </dd>
+
+        <dt class="col-sm-3">Comments</dt>
+        <dd class="col-sm-9">@(beo.Comments ?? "(none)")</dd>
+    </dl>
+
+    <h2>Photos</h2>
+    <div class="mb-3">
+        <label for="beo-photo" class="form-label">Upload a photo (JPEG, PNG, GIF, or WebP; up to 10 MB)</label>
+        <InputFile id="beo-photo" OnChange="UploadPhotoAsync" accept="image/jpeg,image/png,image/gif,image/webp"
+                   disabled="@isUploadingPhoto" />
+        @if (isUploadingPhoto)
+        {
+            <p><em>Uploading photo...</em></p>
+        }
+    </div>
+    @if (uploadedPhotos.Count > 0)
+    {
+        <div class="d-flex flex-wrap gap-3 mb-4">
+            @foreach (var photo in uploadedPhotos)
+            {
+                <img src="@($"/photos/{BeoId}/{photo}")" alt="BEO photo"
+                     class="img-fluid rounded" style="max-height: 16rem" />
+            }
+        </div>
+    }
+
+    <h2>Line items</h2>
+    @if (isLoadingLineItems)
+    {
+        <p><em>Loading line items...</em></p>
+    }
+    else if (lineItems is { Count: 0 })
+    {
+        <p>No line items were found for this BEO.</p>
+    }
+    else if (lineItems is not null)
+    {
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th scope="col">Item</th>
+                        <th scope="col">Quantity</th>
+                        <th scope="col">Notes</th>
+                        <th scope="col">Completed time</th>
+                        <th scope="col">Completed by</th>
+                        <th scope="col">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in lineItems)
+                    {
+                        <tr>
+                            <td>@(item.ItemText ?? "(none)")</td>
+                            <td>@(item.Quantity?.ToString() ?? "(none)")</td>
+                            <td>@(item.Notes ?? "(none)")</td>
+                            <td>@(item.CompletedTime?.ToString(@"hh\:mm\:ss") ?? "(none)")</td>
+                            <td>@(item.CompletedBy?.ToString() ?? "(none)")</td>
+                            <td>
+                                @if (item.CompletedTime is not null)
+                                {
+                                    <span>Completed</span>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-primary btn-sm"
+                                            @onclick="() => MarkCompleteAsync(item.Id)"
+                                            disabled="@completingLineItemIds.Contains(item.Id)">
+                                        @(completingLineItemIds.Contains(item.Id) ? "Saving..." : "Mark complete")
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    [Parameter]
+    public int BeoId { get; set; }
+
+    private BeoOption? beo;
+    private IReadOnlyList<LineItem>? lineItems;
+    private readonly HashSet<int> completingLineItemIds = [];
+    private readonly List<string> uploadedPhotos = [];
+    private bool isLoadingLineItems;
+    private bool isUploadingPhoto;
+    private string? errorMessage;
+    private const long MaximumPhotoSizeBytes = 10 * 1024 * 1024;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        errorMessage = null;
+        beo = null;
+        lineItems = null;
+        isLoadingLineItems = true;
+
+        try
+        {
+            beo = await BeoLineItemService.GetBeoAsync(BeoId);
+            if (beo is null)
+            {
+                errorMessage = "The requested BEO could not be found.";
+                return;
+            }
+
+            lineItems = await BeoLineItemService.GetLineItemsAsync(BeoId);
+            LoadUploadedPhotos();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to load BEO {BeoId} and its line items.", BeoId);
+            errorMessage = "Could not load this BEO. Check that SQL Server is running and the database connection is configured.";
+        }
+        finally
+        {
+            isLoadingLineItems = false;
+        }
+    }
+
+    private async Task UploadPhotoAsync(InputFileChangeEventArgs args)
+    {
+        errorMessage = null;
+        isUploadingPhoto = true;
+        string? savedPhotoPath = null;
+
+        try
+        {
+            await using var photoStream = args.File.OpenReadStream(MaximumPhotoSizeBytes);
+            var header = new byte[12];
+            var headerLength = await photoStream.ReadAtLeastAsync(header, header.Length, throwOnEndOfStream: false);
+            var extension = GetPhotoExtension(header, headerLength);
+            if (extension is null)
+            {
+                errorMessage = "Choose a valid JPEG, PNG, GIF, or WebP image.";
+                return;
+            }
+
+            var photoDirectory = GetPhotoDirectory();
+            Directory.CreateDirectory(photoDirectory);
+            var photoName = $"{Guid.NewGuid():N}{extension}";
+            savedPhotoPath = Path.Combine(photoDirectory, photoName);
+
+            await using (var destination = new FileStream(
+                savedPhotoPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 81920,
+                useAsync: true))
+            {
+                await destination.WriteAsync(header.AsMemory(0, headerLength));
+                await photoStream.CopyToAsync(destination);
+            }
+
+            var imageLink = $"/photos/{BeoId}/";
+            await BeoLineItemService.UpdateBeoImageLinkAsync(BeoId, imageLink);
+            beo = await BeoLineItemService.GetBeoAsync(BeoId);
+            LoadUploadedPhotos();
+        }
+        catch (Exception exception)
+        {
+            if (savedPhotoPath is not null)
+            {
+                try
+                {
+                    File.Delete(savedPhotoPath);
+                }
+                catch (Exception cleanupException)
+                {
+                    Logger.LogError(cleanupException, "Failed to clean up uploaded photo {PhotoPath}.", savedPhotoPath);
+                }
+            }
+
+            Logger.LogError(exception, "Failed to upload a photo for BEO {BeoId}.", BeoId);
+            errorMessage = "Could not upload the photo. Choose an image under 10 MB and try again.";
+        }
+        finally
+        {
+            isUploadingPhoto = false;
+        }
+    }
+
+    private string GetPhotoDirectory()
+    {
+        var webRootPath = HostEnvironment.WebRootPath
+            ?? Path.Combine(HostEnvironment.ContentRootPath, "wwwroot");
+        return Path.Combine(webRootPath, "photos", BeoId.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private void LoadUploadedPhotos()
+    {
+        var photoDirectory = GetPhotoDirectory();
+        uploadedPhotos.Clear();
+        if (Directory.Exists(photoDirectory))
+        {
+            uploadedPhotos.AddRange(Directory.EnumerateFiles(photoDirectory)
+                .Select(Path.GetFileName)
+                .Where(fileName => fileName is not null)
+                .Select(fileName => fileName!));
+        }
+    }
+
+    private static string? GetPhotoExtension(byte[] header, int length)
+    {
+        if (length >= 8 &&
+            header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47 &&
+            header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A)
+        {
+            return ".png";
+        }
+
+        if (length >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF)
+        {
+            return ".jpg";
+        }
+
+        if (length >= 6 &&
+            header[0] == 'G' && header[1] == 'I' && header[2] == 'F' && header[3] == '8' &&
+            (header[4] == '7' || header[4] == '9') && header[5] == 'a')
+        {
+            return ".gif";
+        }
+
+        if (length >= 12 &&
+            header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F' &&
+            header[8] == 'W' && header[9] == 'E' && header[10] == 'B' && header[11] == 'P')
+        {
+            return ".webp";
+        }
+
+        return null;
+    }
+
+    private async Task MarkCompleteAsync(int id)
+    {
+        if (!completingLineItemIds.Add(id))
+        {
+            return;
+        }
+
+        errorMessage = null;
+        try
+        {
+            await BeoLineItemService.MarkCompleteAsync(id);
+            lineItems = await BeoLineItemService.GetLineItemsAsync(BeoId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to mark line item {LineItemId} as complete.", id);
+            errorMessage = "Could not mark the line item as complete.";
+        }
+        finally
+        {
+            completingLineItemIds.Remove(id);
+        }
+    }
+}

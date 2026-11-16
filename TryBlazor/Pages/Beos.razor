@@ -1,7 +1,10 @@
 @page "/beos"
+@attribute [Authorize(Policy = RolePolicies.BeoAccess)]
 @using System.Globalization
+@using System.Security.Claims
 @using TryBlazor.Data
 @inject BeoLineItemService BeoLineItemService
+@inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ILogger<Beos> Logger
 
 <PageTitle>BEOs</PageTitle>
@@ -33,6 +36,13 @@
             }
         </select>
     </div>
+    <div class="col-md-4 d-flex align-items-end">
+        <div class="form-check mb-2">
+            <input id="assigned-to-me" type="checkbox" class="form-check-input"
+                   checked="@onlyAssignedToMe" @onchange="HandleAssignedToMeChanged" />
+            <label for="assigned-to-me" class="form-check-label">Only BEOs assigned to me</label>
+        </div>
+    </div>
 </div>
 
 @if (beos is null)
@@ -63,7 +73,7 @@ else
                 @foreach (BeoOption beo in beos)
                 {
                     <tr>
-                        <td>@(beo.Location ?? "(none)")</td>
+                        <td><a href="@($"/beos/{beo.Id}")">@(beo.Location ?? $"BEO #{beo.EventId}")</a></td>
                         <td>@beo.StartTime.ToString("h:mm tt", CultureInfo.CurrentCulture)</td>
                         <td>@(string.IsNullOrWhiteSpace(beo.Available) ? "(none)" : beo.Available)</td>
                         <td>@(beo.OpenTime is TimeOnly openTime ? openTime.ToString("h:mm tt", CultureInfo.CurrentCulture) : "")</td>
@@ -81,11 +91,14 @@ else
     private string? selectedZone;
     private DateOnly selectedDate = DateOnly.FromDateTime(DateTime.Today);
     private string? errorMessage;
+    private ClaimsPrincipal? currentUser;
+    private bool onlyAssignedToMe;
 
     protected override async Task OnInitializedAsync()
     {
         try
         {
+            currentUser = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
             zones = await BeoLineItemService.GetZonesAsync();
             await ReloadBeosAsync();
         }
@@ -119,6 +132,12 @@ else
         await ReloadBeosAsync();
     }
 
+    private async Task HandleAssignedToMeChanged(ChangeEventArgs args)
+    {
+        onlyAssignedToMe = args.Value is bool value && value;
+        await ReloadBeosAsync();
+    }
+
     private async Task ReloadBeosAsync()
     {
         errorMessage = null;
@@ -126,7 +145,20 @@ else
 
         try
         {
-            beos = await BeoLineItemService.GetBeosAsync(selectedZone, selectedDate);
+            if (onlyAssignedToMe)
+            {
+                if (currentUser is null)
+                {
+                    errorMessage = "Could not identify the signed-in user.";
+                    return;
+                }
+
+                beos = await BeoLineItemService.GetBeosAssignedToAsync(currentUser, selectedZone, selectedDate);
+            }
+            else
+            {
+                beos = await BeoLineItemService.GetBeosAsync(selectedZone, selectedDate);
+            }
         }
         catch (Exception exception)
         {

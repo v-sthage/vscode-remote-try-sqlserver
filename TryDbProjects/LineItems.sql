@@ -11,4 +11,6 @@ CREATE TABLE [dbo].[LineItems]
     CONSTRAINT [FK_LineItems_BEOs] FOREIGN KEY ([BEOid]) REFERENCES [dbo].[BEOs] ([Id])
 );
 
+GO
+
 CREATE INDEX [IX_LineItems_BEOid] ON [dbo].[LineItems] ([BEOid]);

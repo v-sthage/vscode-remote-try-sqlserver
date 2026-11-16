@@ -1,16 +1,18 @@
 CREATE TABLE [dbo].[BEOs]
 (
-    [Id] INT IDENTITY(1, 1) NOT NULL,
-    [EventID] INT NOT NULL,
-    [StartTime] TIME(0) NOT NULL,
-    [Location] NVARCHAR(200) NULL,
-    [Date] DATE NOT NULL,
-    [EndTime] TIME(0) NULL,
-    [TechAssigned] INT NULL,
-    [Zone] NVARCHAR(100) NULL,
-    [ImageLink] NVARCHAR(MAX) NULL,
-    [Comments] NVARCHAR(MAX) NULL,
-    [Available] NVARCHAR(100) NULL,
-    [TurnTime] INT NULL,
+    [Id] [int] NOT NULL,
+	[EventID] [int] NOT NULL,
+	[Location] [nvarchar](50) NOT NULL,
+	[StartTime] [time](7) NOT NULL,
+	[EndTime] [time](7) NOT NULL,
+	[Date] [date] NOT NULL,
+	[TechAssigned] [uniqueidentifier] NULL,
+	[Zone] [nchar](10) NULL,
+	[ImageLink] [nvarchar](50) NULL,
+	[Comments] [ntext] NULL,
+	[Available] [nvarchar](50) NOT NULL,
+	[TurnTime] [int] NULL,
+	[OpenTime] [time](7) NULL,
+	[SetByTime] [time](7) NULL
     CONSTRAINT [PK_BEOs] PRIMARY KEY CLUSTERED ([Id])
 );

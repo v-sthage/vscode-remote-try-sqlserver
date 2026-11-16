@@ -1,0 +1,218 @@
+@page "/assign-beos"
+@attribute [Authorize(Policy = RolePolicies.StandardAccess)]
+@using System.Globalization
+@using TryBlazor.Data
+@inject BeoLineItemService BeoLineItemService
+@inject UserService UserService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ILogger<AssignBeos> Logger
+
+<PageTitle>Assign BEOs</PageTitle>
+
+<h1>Assign BEOs</h1>
+
+<div class="mb-3">
+    <label for="beo-date" class="form-label">BEO date</label>
+    <input id="beo-date" type="date" class="form-control"
+           value="@selectedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)"
+           @onchange="HandleDateChanged" />
+</div>
+
+@if (errorMessage is not null)
+{
+    <div class="alert alert-danger" role="alert">@errorMessage</div>
+}
+@if (statusMessage is not null)
+{
+    <div class="alert alert-success" role="status">@statusMessage</div>
+}
+
+@if (beos is null || users is null)
+{
+    <p><em>Loading BEOs and users...</em></p>
+}
+else if (beos.Count == 0)
+{
+    <p>No BEOs were found for @selectedDate.ToString("D").</p>
+}
+else if (users.Count == 0)
+{
+    <p>No users are available to assign.</p>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th scope="col">BEO</th>
+                    <th scope="col">Start time</th>
+                    <th scope="col">Zone</th>
+                    <th scope="col">Assign to user</th>
+                    <th scope="col">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var beo in beos)
+                {
+                    <tr>
+                        <td>@(beo.Location ?? $"BEO #{beo.EventId}")</td>
+                        <td>@beo.StartTime.ToString("h:mm tt", CultureInfo.CurrentCulture)</td>
+                        <td>@(beo.Zone ?? "(none)")</td>
+                        <td>
+                            <select class="form-select" aria-label="@($"Assignee for BEO #{beo.EventId}")"
+                                    value="@GetSelectedUserId(beo)"
+                                    @onchange="args => HandleUserChanged(beo.Id, args)"
+                                    disabled="@isSaving">
+                                <option value="">Unassigned</option>
+                                @foreach (var user in users)
+                                {
+                                    <option value="@user.Id">@GetUserLabel(user)</option>
+                                }
+                            </select>
+                        </td>
+                        <td>
+                            <button type="button" class="btn btn-primary btn-sm"
+                                    @onclick="() => AssignBeoAsync(beo)"
+                                    disabled="@isSaving">
+                                @(isSaving ? "Saving..." : "Save")
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<BeoOption>? beos;
+    private IReadOnlyList<UserRecord>? users;
+    private readonly Dictionary<int, string> selectedUserIds = new();
+    private DateOnly selectedDate = DateOnly.FromDateTime(DateTime.Today);
+    private string? errorMessage;
+    private string? statusMessage;
+    private bool isSaving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            users = await UserService.GetAssignableUsersAsync();
+            await ReloadBeosAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to load users for BEO assignments.");
+            errorMessage = "Could not load users or BEOs. Check that SQL Server is running and the database is configured.";
+        }
+    }
+
+    private async Task HandleDateChanged(ChangeEventArgs args)
+    {
+        if (!DateOnly.TryParseExact(
+                args.Value?.ToString(),
+                "yyyy-MM-dd",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var date))
+        {
+            errorMessage = "Select a valid date.";
+            return;
+        }
+
+        selectedDate = date;
+        statusMessage = null;
+        await ReloadBeosAsync();
+    }
+
+    private async Task ReloadBeosAsync()
+    {
+        errorMessage = null;
+        beos = null;
+        selectedUserIds.Clear();
+
+        try
+        {
+            beos = await BeoLineItemService.GetBeosAsync(date: selectedDate);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to load BEOs for assignment on {Date}.", selectedDate);
+            errorMessage = "Could not load BEOs for the selected date.";
+        }
+    }
+
+    private void HandleUserChanged(int beoId, ChangeEventArgs args)
+    {
+        selectedUserIds[beoId] = args.Value?.ToString() ?? string.Empty;
+        statusMessage = null;
+        errorMessage = null;
+    }
+
+    private string GetSelectedUserId(BeoOption beo)
+    {
+        return selectedUserIds.TryGetValue(beo.Id, out var selectedUserId)
+            ? selectedUserId
+            : beo.TechAssigned?.ToString() ?? string.Empty;
+    }
+
+    private static string GetUserLabel(UserRecord user)
+    {
+        var name = $"{user.FirstName} {user.LastName}".Trim();
+        return string.IsNullOrWhiteSpace(user.Email)
+            ? $"{name} (role {user.Role})"
+            : $"{name} - {user.Email} (role {user.Role})";
+    }
+
+    private async Task AssignBeoAsync(BeoOption beo)
+    {
+        errorMessage = null;
+        statusMessage = null;
+
+        var selectedUserId = GetSelectedUserId(beo);
+        Guid? userId = null;
+        if (!string.IsNullOrEmpty(selectedUserId))
+        {
+            if (!Guid.TryParse(selectedUserId, out var parsedUserId)
+                || users?.Any(user => user.Id == parsedUserId) != true)
+            {
+                errorMessage = "Select a valid user.";
+                return;
+            }
+
+            userId = parsedUserId;
+        }
+
+        isSaving = true;
+        try
+        {
+            var authenticationState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            await BeoLineItemService.AssignBeoAsync(
+                authenticationState.User,
+                beo.Id,
+                selectedDate,
+                userId);
+
+            beos = beos?
+                .Select(item => item.Id == beo.Id ? item with { TechAssigned = userId } : item)
+                .ToArray();
+            statusMessage = userId is null
+                ? $"BEO #{beo.EventId} is now unassigned."
+                : $"BEO #{beo.EventId} was assigned to {users!.Single(user => user.Id == userId).FirstName}.";
+        }
+        catch (UnauthorizedAccessException)
+        {
+            errorMessage = "Only users with role 2 or higher can assign BEOs.";
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to assign BEO {BeoId} for {Date}.", beo.Id, selectedDate);
+            errorMessage = "Could not save this BEO assignment.";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+}
